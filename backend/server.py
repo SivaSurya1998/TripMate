@@ -1,33 +1,28 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
 from typing import List
 from datetime import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 # Import models and database functions
 from models import (
-    TripType, PackingItem, PackingItemCreate, PackingItemUpdate,
-    ItineraryEvent, ItineraryEventCreate, ItineraryEventUpdate,
-    ExchangeRate, ExchangeRateCreate, ExchangeRateUpdate, Currency,
+    TripType as TripTypePydantic, PackingItem, PackingItemCreate, PackingItemUpdate,
+    ItineraryEvent as ItineraryEventPydantic, ItineraryEventCreate, ItineraryEventUpdate,
+    ExchangeRate as ExchangeRatePydantic, ExchangeRateCreate, ExchangeRateUpdate, Currency,
     ConversionRequest
 )
 from database import (
-    initialize_default_data, get_all_trip_types, get_trip_type_by_id, update_trip_type_items,
-    get_all_events, create_event, update_event, delete_event,
-    get_all_exchange_rates, get_exchange_rate, update_exchange_rate
+    get_db, create_tables, initialize_default_data,
+    TripType as TripTypeDB, ItineraryEvent as ItineraryEventDB, ExchangeRate as ExchangeRateDB
 )
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
-
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -54,81 +49,131 @@ async def root():
 # PACKING LIST ENDPOINTS
 # =============================================================================
 
-@api_router.get("/trip-types", response_model=List[TripType])
-async def get_trip_types():
+@api_router.get("/trip-types", response_model=List[TripTypePydantic])
+async def get_trip_types(db: AsyncSession = Depends(get_db)):
     """Get all available trip types with their default packing items"""
-    return await get_all_trip_types()
+    result = await db.execute(select(TripTypeDB))
+    trip_types = result.scalars().all()
+    
+    return [TripTypePydantic(
+        id=trip_type.id,
+        name=trip_type.name,
+        icon=trip_type.icon,
+        color=trip_type.color,
+        items=[PackingItem(**item) for item in trip_type.items]
+    ) for trip_type in trip_types]
 
-@api_router.get("/trip-types/{trip_id}", response_model=TripType)
-async def get_trip_type(trip_id: str):
+@api_router.get("/trip-types/{trip_id}", response_model=TripTypePydantic)
+async def get_trip_type(trip_id: str, db: AsyncSession = Depends(get_db)):
     """Get a specific trip type by ID"""
-    trip_type = await get_trip_type_by_id(trip_id)
-    if not trip_type:
-        raise HTTPException(status_code=404, detail="Trip type not found")
-    return trip_type
-
-@api_router.post("/trip-types/{trip_id}/items", response_model=PackingItem)
-async def add_packing_item(trip_id: str, item: PackingItemCreate):
-    """Add a new packing item to a trip type"""
-    trip_type = await get_trip_type_by_id(trip_id)
+    result = await db.execute(select(TripTypeDB).where(TripTypeDB.id == trip_id))
+    trip_type = result.scalar_one_or_none()
+    
     if not trip_type:
         raise HTTPException(status_code=404, detail="Trip type not found")
     
-    new_item = PackingItem(
-        id=str(len(trip_type.items) + 1000),  # Simple ID generation
-        **item.dict()
+    return TripTypePydantic(
+        id=trip_type.id,
+        name=trip_type.name,
+        icon=trip_type.icon,
+        color=trip_type.color,
+        items=[PackingItem(**item) for item in trip_type.items]
     )
-    trip_type.items.append(new_item)
-    await update_trip_type_items(trip_id, trip_type.items)
-    return new_item
+
+@api_router.post("/trip-types/{trip_id}/items", response_model=PackingItem)
+async def add_packing_item(trip_id: str, item: PackingItemCreate, db: AsyncSession = Depends(get_db)):
+    """Add a new packing item to a trip type"""
+    result = await db.execute(select(TripTypeDB).where(TripTypeDB.id == trip_id))
+    trip_type = result.scalar_one_or_none()
+    
+    if not trip_type:
+        raise HTTPException(status_code=404, detail="Trip type not found")
+    
+    new_item = {
+        "id": str(len(trip_type.items) + 1000),  # Simple ID generation
+        "name": item.name,
+        "category": item.category,
+        "packed": False
+    }
+    
+    updated_items = trip_type.items + [new_item]
+    trip_type.items = updated_items
+    
+    await db.commit()
+    await db.refresh(trip_type)
+    
+    return PackingItem(**new_item)
 
 @api_router.put("/trip-types/{trip_id}/items/{item_id}", response_model=PackingItem)
-async def update_packing_item(trip_id: str, item_id: str, item_update: PackingItemUpdate):
+async def update_packing_item(trip_id: str, item_id: str, item_update: PackingItemUpdate, db: AsyncSession = Depends(get_db)):
     """Update a packing item (mainly for toggling packed status)"""
-    trip_type = await get_trip_type_by_id(trip_id)
+    result = await db.execute(select(TripTypeDB).where(TripTypeDB.id == trip_id))
+    trip_type = result.scalar_one_or_none()
+    
     if not trip_type:
         raise HTTPException(status_code=404, detail="Trip type not found")
     
     item_found = False
+    updated_items = []
     for item in trip_type.items:
-        if item.id == item_id:
-            item.packed = item_update.packed
+        if item["id"] == item_id:
+            item["packed"] = item_update.packed
             item_found = True
-            break
+        updated_items.append(item)
     
     if not item_found:
         raise HTTPException(status_code=404, detail="Packing item not found")
     
-    await update_trip_type_items(trip_id, trip_type.items)
-    return next(item for item in trip_type.items if item.id == item_id)
+    trip_type.items = updated_items
+    await db.commit()
+    await db.refresh(trip_type)
+    
+    return PackingItem(**next(item for item in trip_type.items if item["id"] == item_id))
 
 @api_router.delete("/trip-types/{trip_id}/items/{item_id}")
-async def delete_packing_item(trip_id: str, item_id: str):
+async def delete_packing_item(trip_id: str, item_id: str, db: AsyncSession = Depends(get_db)):
     """Delete a packing item from a trip type"""
-    trip_type = await get_trip_type_by_id(trip_id)
+    result = await db.execute(select(TripTypeDB).where(TripTypeDB.id == trip_id))
+    trip_type = result.scalar_one_or_none()
+    
     if not trip_type:
         raise HTTPException(status_code=404, detail="Trip type not found")
     
     original_length = len(trip_type.items)
-    trip_type.items = [item for item in trip_type.items if item.id != item_id]
+    updated_items = [item for item in trip_type.items if item["id"] != item_id]
     
-    if len(trip_type.items) == original_length:
+    if len(updated_items) == original_length:
         raise HTTPException(status_code=404, detail="Packing item not found")
     
-    await update_trip_type_items(trip_id, trip_type.items)
+    trip_type.items = updated_items
+    await db.commit()
+    
     return {"message": "Packing item deleted successfully"}
 
 # =============================================================================
 # ITINERARY ENDPOINTS
 # =============================================================================
 
-@api_router.get("/events", response_model=List[ItineraryEvent])
-async def get_events():
+@api_router.get("/events", response_model=List[ItineraryEventPydantic])
+async def get_events(db: AsyncSession = Depends(get_db)):
     """Get all itinerary events sorted by date and time"""
-    return await get_all_events()
+    result = await db.execute(select(ItineraryEventDB).order_by(ItineraryEventDB.date, ItineraryEventDB.time))
+    events = result.scalars().all()
+    
+    return [ItineraryEventPydantic(
+        id=event.id,
+        title=event.title,
+        date=event.date,
+        time=event.time,
+        location=event.location,
+        description=event.description,
+        type=event.type,
+        icon=event.icon,
+        created_at=event.created_at
+    ) for event in events]
 
-@api_router.post("/events", response_model=ItineraryEvent)
-async def create_itinerary_event(event: ItineraryEventCreate):
+@api_router.post("/events", response_model=ItineraryEventPydantic)
+async def create_itinerary_event(event: ItineraryEventCreate, db: AsyncSession = Depends(get_db)):
     """Create a new itinerary event"""
     # Map event type to icon
     type_icons = {
@@ -138,41 +183,75 @@ async def create_itinerary_event(event: ItineraryEventCreate):
         "activity": "📅"
     }
     
-    new_event = ItineraryEvent(
+    new_event = ItineraryEventDB(
         id=str(int(datetime.utcnow().timestamp() * 1000)),  # Simple ID generation
-        **event.dict(),
+        title=event.title,
+        date=event.date,
+        time=event.time,
+        location=event.location,
+        description=event.description,
+        type=event.type,
         icon=type_icons.get(event.type, "📅"),
         created_at=datetime.utcnow()
     )
-    return await create_event(new_event)
+    
+    db.add(new_event)
+    await db.commit()
+    await db.refresh(new_event)
+    
+    return ItineraryEventPydantic(
+        id=new_event.id,
+        title=new_event.title,
+        date=new_event.date,
+        time=new_event.time,
+        location=new_event.location,
+        description=new_event.description,
+        type=new_event.type,
+        icon=new_event.icon,
+        created_at=new_event.created_at
+    )
 
-@api_router.put("/events/{event_id}", response_model=ItineraryEvent)
-async def update_itinerary_event(event_id: str, event_update: ItineraryEventUpdate):
+@api_router.put("/events/{event_id}", response_model=ItineraryEventPydantic)
+async def update_itinerary_event(event_id: str, event_update: ItineraryEventUpdate, db: AsyncSession = Depends(get_db)):
     """Update an existing itinerary event"""
-    # Get current event to check if it exists
-    events = await get_all_events()
-    current_event = next((e for e in events if e.id == event_id), None)
-    if not current_event:
+    result = await db.execute(select(ItineraryEventDB).where(ItineraryEventDB.id == event_id))
+    event = result.scalar_one_or_none()
+    
+    if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     
     # Update only provided fields
     update_data = event_update.dict(exclude_unset=True)
-    if update_data:
-        await update_event(event_id, update_data)
+    for field, value in update_data.items():
+        setattr(event, field, value)
     
-    # Return updated event
-    updated_events = await get_all_events()
-    return next(e for e in updated_events if e.id == event_id)
+    await db.commit()
+    await db.refresh(event)
+    
+    return ItineraryEventPydantic(
+        id=event.id,
+        title=event.title,
+        date=event.date,
+        time=event.time,
+        location=event.location,
+        description=event.description,
+        type=event.type,
+        icon=event.icon,
+        created_at=event.created_at
+    )
 
 @api_router.delete("/events/{event_id}")
-async def delete_itinerary_event(event_id: str):
+async def delete_itinerary_event(event_id: str, db: AsyncSession = Depends(get_db)):
     """Delete an itinerary event"""
-    events = await get_all_events()
-    event_exists = any(e.id == event_id for e in events)
-    if not event_exists:
+    result = await db.execute(select(ItineraryEventDB).where(ItineraryEventDB.id == event_id))
+    event = result.scalar_one_or_none()
+    
+    if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     
-    await delete_event(event_id)
+    await db.delete(event)
+    await db.commit()
+    
     return {"message": "Event deleted successfully"}
 
 # =============================================================================
@@ -184,16 +263,29 @@ async def get_currencies():
     """Get all supported currencies"""
     return SUPPORTED_CURRENCIES
 
-@api_router.get("/exchange-rates", response_model=List[ExchangeRate])
-async def get_exchange_rates():
+@api_router.get("/exchange-rates", response_model=List[ExchangeRatePydantic])
+async def get_exchange_rates(db: AsyncSession = Depends(get_db)):
     """Get all exchange rates"""
-    return await get_all_exchange_rates()
+    result = await db.execute(select(ExchangeRateDB))
+    rates = result.scalars().all()
+    
+    return [ExchangeRatePydantic(
+        id=rate.id,
+        from_currency=rate.from_currency,
+        to_currency=rate.to_currency,
+        rate=rate.rate,
+        last_updated=rate.last_updated
+    ) for rate in rates]
 
 @api_router.post("/convert", response_model=dict)
-async def convert_currency(conversion: ConversionRequest):
+async def convert_currency(conversion: ConversionRequest, db: AsyncSession = Depends(get_db)):
     """Convert currency from one to another"""
     # Try to find direct exchange rate
-    rate = await get_exchange_rate(conversion.from_currency, conversion.to_currency)
+    result = await db.execute(select(ExchangeRateDB).where(
+        ExchangeRateDB.from_currency == conversion.from_currency,
+        ExchangeRateDB.to_currency == conversion.to_currency
+    ))
+    rate = result.scalar_one_or_none()
     
     if rate:
         converted_amount = conversion.amount * rate.rate
@@ -206,7 +298,12 @@ async def convert_currency(conversion: ConversionRequest):
         }
     
     # Try inverse rate
-    inverse_rate = await get_exchange_rate(conversion.to_currency, conversion.from_currency)
+    result = await db.execute(select(ExchangeRateDB).where(
+        ExchangeRateDB.from_currency == conversion.to_currency,
+        ExchangeRateDB.to_currency == conversion.from_currency
+    ))
+    inverse_rate = result.scalar_one_or_none()
+    
     if inverse_rate:
         converted_amount = conversion.amount / inverse_rate.rate
         return {
@@ -220,9 +317,28 @@ async def convert_currency(conversion: ConversionRequest):
     raise HTTPException(status_code=404, detail="Exchange rate not found")
 
 @api_router.put("/exchange-rates/{from_currency}/{to_currency}")
-async def update_rate(from_currency: str, to_currency: str, rate_update: ExchangeRateUpdate):
+async def update_rate(from_currency: str, to_currency: str, rate_update: ExchangeRateUpdate, db: AsyncSession = Depends(get_db)):
     """Update an exchange rate"""
-    await update_exchange_rate(from_currency, to_currency, rate_update.rate)
+    result = await db.execute(select(ExchangeRateDB).where(
+        ExchangeRateDB.from_currency == from_currency,
+        ExchangeRateDB.to_currency == to_currency
+    ))
+    rate = result.scalar_one_or_none()
+    
+    if rate:
+        rate.rate = rate_update.rate
+        rate.last_updated = "2025-07-10"
+    else:
+        # Create new rate if it doesn't exist
+        rate = ExchangeRateDB(
+            from_currency=from_currency,
+            to_currency=to_currency,
+            rate=rate_update.rate,
+            last_updated="2025-07-10"
+        )
+        db.add(rate)
+    
+    await db.commit()
     return {"message": f"Exchange rate updated: {from_currency} to {to_currency} = {rate_update.rate}"}
 
 # Include the router in the main app
@@ -245,9 +361,10 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_db():
-    """Initialize the database with default data on startup"""
+    """Initialize the database with tables and default data on startup"""
+    await create_tables()
     await initialize_default_data()
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    pass
