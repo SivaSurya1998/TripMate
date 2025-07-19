@@ -3,8 +3,9 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
-import { ArrowUpDown, DollarSign, TrendingUp, Settings } from 'lucide-react';
-import { exchangeRates, currencies } from '../data/mockData';
+import { ArrowUpDown, DollarSign, TrendingUp, Settings, Loader2 } from 'lucide-react';
+import { currencyAPI } from '../services/api';
+import { useToast } from '../hooks/use-toast';
 
 const CurrencyConverter = () => {
   const [amount, setAmount] = useState('100');
@@ -12,50 +13,104 @@ const CurrencyConverter = () => {
   const [toCurrency, setToCurrency] = useState('EUR');
   const [convertedAmount, setConvertedAmount] = useState('');
   const [showRateSettings, setShowRateSettings] = useState(false);
-  const [customRates, setCustomRates] = useState(exchangeRates);
+  const [currencies, setCurrencies] = useState([]);
+  const [exchangeRates, setExchangeRates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [converting, setConverting] = useState(false);
+  const { toast } = useToast();
+
+  // Load initial data
+  useEffect(() => {
+    loadInitialData();
+  }, []);
+
+  // Auto-convert when amount or currencies change
+  useEffect(() => {
+    if (amount && fromCurrency && toCurrency && currencies.length > 0) {
+      handleConversion();
+    }
+  }, [amount, fromCurrency, toCurrency]);
+
+  const loadInitialData = async () => {
+    try {
+      setLoading(true);
+      const [currenciesData, ratesData] = await Promise.all([
+        currencyAPI.getCurrencies(),
+        currencyAPI.getExchangeRates()
+      ]);
+      setCurrencies(currenciesData);
+      setExchangeRates(ratesData);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to load currency data. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConversion = async () => {
+    if (!amount || !fromCurrency || !toCurrency) return;
+
+    try {
+      setConverting(true);
+      const result = await currencyAPI.convertCurrency(
+        parseFloat(amount),
+        fromCurrency,
+        toCurrency
+      );
+      setConvertedAmount(result.converted_amount.toString());
+    } catch (error) {
+      setConvertedAmount('Rate not available');
+      toast({
+        title: "Conversion Error",
+        description: "Exchange rate not found for this currency pair.",
+        variant: "destructive",
+      });
+    } finally {
+      setConverting(false);
+    }
+  };
 
   const swapCurrencies = () => {
     setFromCurrency(toCurrency);
     setToCurrency(fromCurrency);
   };
 
-  const updateRate = (pair, newRate) => {
-    setCustomRates(prev => ({
-      ...prev,
-      [pair]: { ...prev[pair], rate: parseFloat(newRate) }
-    }));
+  const updateRate = async (rateId, newRate) => {
+    const rate = exchangeRates.find(r => r.id === rateId);
+    if (!rate) return;
+
+    try {
+      await currencyAPI.updateExchangeRate(rate.from_currency, rate.to_currency, parseFloat(newRate));
+      setExchangeRates(prev => prev.map(r => 
+        r.id === rateId ? { ...r, rate: parseFloat(newRate) } : r
+      ));
+      toast({
+        title: "Rate Updated",
+        description: `Exchange rate for ${rate.from_currency}/${rate.to_currency} updated successfully`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update exchange rate.",
+        variant: "destructive",
+      });
+    }
   };
 
-  useEffect(() => {
-    if (amount && fromCurrency && toCurrency) {
-      const rateKey = `${fromCurrency}_${toCurrency}`;
-      const rate = customRates[rateKey]?.rate;
-      
-      if (rate) {
-        const result = (parseFloat(amount) * rate).toFixed(2);
-        setConvertedAmount(result);
-      } else {
-        // Calculate inverse rate if direct rate doesn't exist
-        const inverseKey = `${toCurrency}_${fromCurrency}`;
-        const inverseRate = customRates[inverseKey]?.rate;
-        if (inverseRate) {
-          const result = (parseFloat(amount) / inverseRate).toFixed(2);
-          setConvertedAmount(result);
-        } else {
-          setConvertedAmount('Rate not available');
-        }
-      }
-    }
-  }, [amount, fromCurrency, toCurrency, customRates]);
-
   const getCurrentRate = () => {
-    const rateKey = `${fromCurrency}_${toCurrency}`;
-    const rate = customRates[rateKey]?.rate;
-    if (rate) return rate;
+    const rate = exchangeRates.find(r => 
+      r.from_currency === fromCurrency && r.to_currency === toCurrency
+    );
+    if (rate) return rate.rate;
     
-    const inverseKey = `${toCurrency}_${fromCurrency}`;
-    const inverseRate = customRates[inverseKey]?.rate;
-    if (inverseRate) return (1 / inverseRate).toFixed(4);
+    const inverseRate = exchangeRates.find(r => 
+      r.from_currency === toCurrency && r.to_currency === fromCurrency
+    );
+    if (inverseRate) return (1 / inverseRate.rate).toFixed(4);
     
     return 'N/A';
   };
@@ -65,6 +120,15 @@ const CurrencyConverter = () => {
   };
 
   const quickAmounts = ['10', '50', '100', '500', '1000'];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin" />
+        <span className="ml-2">Loading currency data...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -100,19 +164,19 @@ const CurrencyConverter = () => {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.entries(customRates).map(([pair, data]) => (
-                <div key={pair} className="p-3 border rounded-lg">
+              {exchangeRates.map((rate) => (
+                <div key={rate.id} className="p-3 border rounded-lg">
                   <div className="flex items-center justify-between mb-2">
-                    <span className="font-medium text-sm">{pair.replace('_', ' → ')}</span>
+                    <span className="font-medium text-sm">{rate.from_currency} → {rate.to_currency}</span>
                     <Badge variant="outline" className="text-xs">
-                      Updated {data.lastUpdated}
+                      Updated {rate.last_updated}
                     </Badge>
                   </div>
                   <Input
                     type="number"
                     step="0.0001"
-                    value={data.rate}
-                    onChange={(e) => updateRate(pair, e.target.value)}
+                    value={rate.rate}
+                    onChange={(e) => updateRate(rate.id, e.target.value)}
                     className="text-sm"
                   />
                 </div>
@@ -197,7 +261,7 @@ const CurrencyConverter = () => {
                 </select>
                 <div className="flex-1 relative">
                   <Input
-                    value={convertedAmount}
+                    value={converting ? 'Converting...' : convertedAmount}
                     readOnly
                     className="text-lg font-bold text-primary bg-primary/5"
                   />
@@ -219,7 +283,7 @@ const CurrencyConverter = () => {
             </Card>
 
             {/* Conversion Result */}
-            {amount && convertedAmount && convertedAmount !== 'Rate not available' && (
+            {amount && convertedAmount && convertedAmount !== 'Rate not available' && !converting && (
               <Card className="bg-gradient-to-r from-green-50 to-emerald-50 border-green-200">
                 <CardContent className="p-4">
                   <div className="text-center">

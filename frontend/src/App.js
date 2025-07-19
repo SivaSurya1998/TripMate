@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Card, CardContent } from "./components/ui/card";
 import { Package, Calendar, DollarSign, Plane } from "lucide-react";
+import { Toaster } from "./components/ui/toaster";
 import PackingList from "./components/PackingList";
 import Itinerary from "./components/Itinerary";
 import CurrencyConverter from "./components/CurrencyConverter";
@@ -84,11 +85,14 @@ const Home = () => {
           <div className="text-center text-sm text-muted-foreground">
             <p>Built with ❤️ for travelers worldwide</p>
             <p className="mt-1 text-xs">
-              ✨ This is a frontend demo with mock data - backend integration coming next!
+              ✨ Powered by React + FastAPI + PostgreSQL
             </p>
           </div>
         </div>
       </footer>
+
+      {/* Toast Notifications */}
+      <Toaster />
     </div>
   );
 };

@@ -1,15 +1,19 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
-import { Calendar, Clock, MapPin, Plus, Mail, Download, Plane, Hotel, UtensilsCrossed, Camera } from 'lucide-react';
-import { mockItinerary } from '../data/mockData';
+import { Calendar, Clock, MapPin, Plus, Mail, Download, Plane, Hotel, UtensilsCrossed, Camera, Loader2 } from 'lucide-react';
+import { itineraryAPI } from '../services/api';
+import { useToast } from '../hooks/use-toast';
 
 const Itinerary = () => {
-  const [events, setEvents] = useState(mockItinerary);
+  const [events, setEvents] = useState([]);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const { toast } = useToast();
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
@@ -33,14 +37,41 @@ const Itinerary = () => {
     activity: 'bg-green-100 text-green-800 border-green-200'
   };
 
-  const addEvent = () => {
-    if (newEvent.title && newEvent.date && newEvent.time) {
-      const event = {
-        id: Date.now(),
-        ...newEvent,
-        icon: eventTypeIcons[newEvent.type]?.type?.render() || '📅'
-      };
-      setEvents(prev => [...prev, event].sort((a, b) => 
+  // Load events on component mount
+  useEffect(() => {
+    loadEvents();
+  }, []);
+
+  const loadEvents = async () => {
+    try {
+      setLoading(true);
+      const eventsData = await itineraryAPI.getEvents();
+      setEvents(eventsData);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to load events. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addEvent = async () => {
+    if (!newEvent.title || !newEvent.date || !newEvent.time) {
+      toast({
+        title: "Missing Information",
+        description: "Please fill in title, date, and time.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      setAdding(true);
+      const createdEvent = await itineraryAPI.createEvent(newEvent);
+      setEvents(prev => [...prev, createdEvent].sort((a, b) => 
         new Date(`${a.date} ${a.time}`) - new Date(`${b.date} ${b.time}`)
       ));
       setNewEvent({
@@ -52,6 +83,35 @@ const Itinerary = () => {
         type: 'activity'
       });
       setShowAddForm(false);
+      toast({
+        title: "Event Added",
+        description: `${createdEvent.title} has been added to your itinerary`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to add event. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const deleteEvent = async (eventId) => {
+    try {
+      await itineraryAPI.deleteEvent(eventId);
+      setEvents(prev => prev.filter(event => event.id !== eventId));
+      toast({
+        title: "Event Deleted",
+        description: "Event has been removed from your itinerary",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete event. Please try again.",
+        variant: "destructive",
+      });
     }
   };
 
@@ -99,6 +159,15 @@ const Itinerary = () => {
       return groups;
     }, {});
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin" />
+        <span className="ml-2">Loading events...</span>
+      </div>
+    );
+  }
 
   const groupedEvents = groupEventsByDate(events);
 
@@ -178,7 +247,10 @@ const Itinerary = () => {
               />
             </div>
             <div className="flex gap-2 mt-4">
-              <Button onClick={addEvent}>Add Event</Button>
+              <Button onClick={addEvent} disabled={adding}>
+                {adding ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Add Event
+              </Button>
               <Button variant="outline" onClick={() => setShowAddForm(false)}>Cancel</Button>
             </div>
           </CardContent>
@@ -219,9 +291,19 @@ const Itinerary = () => {
                             </div>
                             <p className="text-sm text-muted-foreground">{event.description}</p>
                           </div>
-                          <Badge variant="outline" className={eventTypeColors[event.type]}>
-                            {event.type}
-                          </Badge>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className={eventTypeColors[event.type]}>
+                              {event.type}
+                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => deleteEvent(event.id)}
+                              className="text-red-600 hover:text-red-800"
+                            >
+                              Delete
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -231,6 +313,13 @@ const Itinerary = () => {
             </div>
           </div>
         ))}
+        
+        {events.length === 0 && (
+          <div className="text-center py-8">
+            <Calendar className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+            <p className="text-muted-foreground">No events scheduled yet. Add your first event to get started!</p>
+          </div>
+        )}
       </div>
     </div>
   );
