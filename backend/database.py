@@ -1,141 +1,167 @@
-from motor.motor_asyncio import AsyncIOMotorClient
+from sqlalchemy import create_engine, Column, String, Boolean, Float, DateTime, Text, ForeignKey, Integer
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.dialects.postgresql import UUID
+from datetime import datetime
+import uuid
 import os
-from typing import List
-from models import TripType, PackingItem, ItineraryEvent, ExchangeRate
+from pathlib import Path
+from dotenv import load_dotenv
 
-# Database connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
 
-# Collections
-trip_types_collection = db.trip_types
-packing_items_collection = db.packing_items
-itinerary_events_collection = db.itinerary_events
-exchange_rates_collection = db.exchange_rates
+# Database configuration
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://localhost:5432/tripmate_db')
+
+# Create engine
+engine = create_engine(DATABASE_URL, echo=True)
+
+# Create SessionLocal class
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Create Base class
+Base = declarative_base()
+
+# Dependency to get DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# =============================================================================
+# DATABASE MODELS
+# =============================================================================
+
+class TripType(Base):
+    __tablename__ = "trip_types"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    icon = Column(String, nullable=False)
+    color = Column(String, nullable=False)
+    
+    # Relationship to packing items
+    items = relationship("PackingItem", back_populates="trip_type", cascade="all, delete-orphan")
+
+class PackingItem(Base):
+    __tablename__ = "packing_items"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=False, default="custom")
+    packed = Column(Boolean, default=False)
+    trip_type_id = Column(String, ForeignKey("trip_types.id"), nullable=False)
+    
+    # Relationship to trip type
+    trip_type = relationship("TripType", back_populates="items")
+
+class ItineraryEvent(Base):
+    __tablename__ = "itinerary_events"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String, nullable=False)
+    date = Column(String, nullable=False)  # Using string for simplicity, could be Date type
+    time = Column(String, nullable=False)
+    location = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    type = Column(String, nullable=False, default="activity")
+    icon = Column(String, nullable=False, default="📅")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ExchangeRate(Base):
+    __tablename__ = "exchange_rates"
+    
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    from_currency = Column(String, nullable=False)
+    to_currency = Column(String, nullable=False)
+    rate = Column(Float, nullable=False)
+    last_updated = Column(String, nullable=False)
+
+# Create tables
+def create_tables():
+    Base.metadata.create_all(bind=engine)
 
 # Initialize default data
-async def initialize_default_data():
+def initialize_default_data(db: Session):
     """Initialize the database with default trip types and exchange rates"""
     
     # Check if trip types already exist
-    existing_trip_types = await trip_types_collection.count_documents({})
+    existing_trip_types = db.query(TripType).count()
     if existing_trip_types == 0:
-        default_trip_types = [
-            {
-                "id": "beach",
-                "name": "Beach Getaway",
-                "icon": "🏖️",
-                "color": "from-blue-400 to-cyan-300",
-                "items": [
-                    {"id": "1", "name": "Sunscreen SPF 50+", "category": "essentials", "packed": False},
-                    {"id": "2", "name": "Swimwear", "category": "clothing", "packed": False},
-                    {"id": "3", "name": "Beach towel", "category": "essentials", "packed": False},
-                    {"id": "4", "name": "Flip flops", "category": "footwear", "packed": False},
-                    {"id": "5", "name": "Sunglasses", "category": "accessories", "packed": False},
-                    {"id": "6", "name": "Beach hat", "category": "accessories", "packed": False},
-                    {"id": "7", "name": "Water bottle", "category": "essentials", "packed": False},
-                ]
-            },
-            {
-                "id": "city",
-                "name": "City Explorer",
-                "icon": "🏙️",
-                "color": "from-purple-400 to-pink-300",
-                "items": [
-                    {"id": "8", "name": "Comfortable walking shoes", "category": "footwear", "packed": False},
-                    {"id": "9", "name": "Portable charger", "category": "electronics", "packed": False},
-                    {"id": "10", "name": "Day backpack", "category": "accessories", "packed": False},
-                    {"id": "11", "name": "City map/guidebook", "category": "essentials", "packed": False},
-                    {"id": "12", "name": "Camera", "category": "electronics", "packed": False},
-                    {"id": "13", "name": "Light jacket", "category": "clothing", "packed": False},
-                    {"id": "14", "name": "Reusable water bottle", "category": "essentials", "packed": False},
-                ]
-            },
-            {
-                "id": "business",
-                "name": "Business Trip",
-                "icon": "💼",
-                "color": "from-gray-400 to-slate-300",
-                "items": [
-                    {"id": "15", "name": "Business cards", "category": "essentials", "packed": False},
-                    {"id": "16", "name": "Laptop + charger", "category": "electronics", "packed": False},
-                    {"id": "17", "name": "Professional attire", "category": "clothing", "packed": False},
-                    {"id": "18", "name": "Dress shoes", "category": "footwear", "packed": False},
-                    {"id": "19", "name": "Portfolio/documents", "category": "essentials", "packed": False},
-                    {"id": "20", "name": "Phone charger", "category": "electronics", "packed": False},
-                    {"id": "21", "name": "Travel adapter", "category": "electronics", "packed": False},
-                ]
-            }
+        # Create default trip types
+        beach_trip = TripType(
+            id="beach",
+            name="Beach Getaway",
+            icon="🏖️",
+            color="from-blue-400 to-cyan-300"
+        )
+        
+        city_trip = TripType(
+            id="city",
+            name="City Explorer",
+            icon="🏙️",
+            color="from-purple-400 to-pink-300"
+        )
+        
+        business_trip = TripType(
+            id="business",
+            name="Business Trip",
+            icon="💼",
+            color="from-gray-400 to-slate-300"
+        )
+        
+        db.add_all([beach_trip, city_trip, business_trip])
+        db.commit()
+        
+        # Add default items for beach trip
+        beach_items = [
+            PackingItem(id="1", name="Sunscreen SPF 50+", category="essentials", trip_type_id="beach"),
+            PackingItem(id="2", name="Swimwear", category="clothing", trip_type_id="beach"),
+            PackingItem(id="3", name="Beach towel", category="essentials", trip_type_id="beach"),
+            PackingItem(id="4", name="Flip flops", category="footwear", trip_type_id="beach"),
+            PackingItem(id="5", name="Sunglasses", category="accessories", trip_type_id="beach"),
+            PackingItem(id="6", name="Beach hat", category="accessories", trip_type_id="beach"),
+            PackingItem(id="7", name="Water bottle", category="essentials", trip_type_id="beach"),
         ]
-        await trip_types_collection.insert_many(default_trip_types)
+        
+        # Add default items for city trip
+        city_items = [
+            PackingItem(id="8", name="Comfortable walking shoes", category="footwear", trip_type_id="city"),
+            PackingItem(id="9", name="Portable charger", category="electronics", trip_type_id="city"),
+            PackingItem(id="10", name="Day backpack", category="accessories", trip_type_id="city"),
+            PackingItem(id="11", name="City map/guidebook", category="essentials", trip_type_id="city"),
+            PackingItem(id="12", name="Camera", category="electronics", trip_type_id="city"),
+            PackingItem(id="13", name="Light jacket", category="clothing", trip_type_id="city"),
+            PackingItem(id="14", name="Reusable water bottle", category="essentials", trip_type_id="city"),
+        ]
+        
+        # Add default items for business trip
+        business_items = [
+            PackingItem(id="15", name="Business cards", category="essentials", trip_type_id="business"),
+            PackingItem(id="16", name="Laptop + charger", category="electronics", trip_type_id="business"),
+            PackingItem(id="17", name="Professional attire", category="clothing", trip_type_id="business"),
+            PackingItem(id="18", name="Dress shoes", category="footwear", trip_type_id="business"),
+            PackingItem(id="19", name="Portfolio/documents", category="essentials", trip_type_id="business"),
+            PackingItem(id="20", name="Phone charger", category="electronics", trip_type_id="business"),
+            PackingItem(id="21", name="Travel adapter", category="electronics", trip_type_id="business"),
+        ]
+        
+        db.add_all(beach_items + city_items + business_items)
+        db.commit()
     
     # Check if exchange rates already exist
-    existing_rates = await exchange_rates_collection.count_documents({})
+    existing_rates = db.query(ExchangeRate).count()
     if existing_rates == 0:
         default_exchange_rates = [
-            {"id": "usd_eur", "from_currency": "USD", "to_currency": "EUR", "rate": 0.85, "last_updated": "2025-07-10"},
-            {"id": "usd_gbp", "from_currency": "USD", "to_currency": "GBP", "rate": 0.73, "last_updated": "2025-07-10"},
-            {"id": "usd_jpy", "from_currency": "USD", "to_currency": "JPY", "rate": 110.25, "last_updated": "2025-07-10"},
-            {"id": "eur_usd", "from_currency": "EUR", "to_currency": "USD", "rate": 1.18, "last_updated": "2025-07-10"},
-            {"id": "gbp_usd", "from_currency": "GBP", "to_currency": "USD", "rate": 1.37, "last_updated": "2025-07-10"},
-            {"id": "jpy_usd", "from_currency": "JPY", "to_currency": "USD", "rate": 0.0091, "last_updated": "2025-07-10"},
+            ExchangeRate(id="usd_eur", from_currency="USD", to_currency="EUR", rate=0.85, last_updated="2025-07-10"),
+            ExchangeRate(id="usd_gbp", from_currency="USD", to_currency="GBP", rate=0.73, last_updated="2025-07-10"),
+            ExchangeRate(id="usd_jpy", from_currency="USD", to_currency="JPY", rate=110.25, last_updated="2025-07-10"),
+            ExchangeRate(id="eur_usd", from_currency="EUR", to_currency="USD", rate=1.18, last_updated="2025-07-10"),
+            ExchangeRate(id="gbp_usd", from_currency="GBP", to_currency="USD", rate=1.37, last_updated="2025-07-10"),
+            ExchangeRate(id="jpy_usd", from_currency="JPY", to_currency="USD", rate=0.0091, last_updated="2025-07-10"),
         ]
-        await exchange_rates_collection.insert_many(default_exchange_rates)
-
-# Database operations for Trip Types
-async def get_all_trip_types() -> List[TripType]:
-    trip_types = await trip_types_collection.find().to_list(1000)
-    return [TripType(**trip_type) for trip_type in trip_types]
-
-async def get_trip_type_by_id(trip_id: str) -> TripType:
-    trip_type = await trip_types_collection.find_one({"id": trip_id})
-    if trip_type:
-        return TripType(**trip_type)
-    return None
-
-async def update_trip_type_items(trip_id: str, items: List[PackingItem]):
-    items_dict = [item.dict() for item in items]
-    await trip_types_collection.update_one(
-        {"id": trip_id},
-        {"$set": {"items": items_dict}}
-    )
-
-# Database operations for Itinerary Events
-async def get_all_events() -> List[ItineraryEvent]:
-    events = await itinerary_events_collection.find().sort("date", 1).sort("time", 1).to_list(1000)
-    return [ItineraryEvent(**event) for event in events]
-
-async def create_event(event: ItineraryEvent) -> ItineraryEvent:
-    await itinerary_events_collection.insert_one(event.dict())
-    return event
-
-async def update_event(event_id: str, event_data: dict):
-    await itinerary_events_collection.update_one(
-        {"id": event_id},
-        {"$set": event_data}
-    )
-
-async def delete_event(event_id: str):
-    await itinerary_events_collection.delete_one({"id": event_id})
-
-# Database operations for Exchange Rates
-async def get_all_exchange_rates() -> List[ExchangeRate]:
-    rates = await exchange_rates_collection.find().to_list(1000)
-    return [ExchangeRate(**rate) for rate in rates]
-
-async def get_exchange_rate(from_currency: str, to_currency: str) -> ExchangeRate:
-    rate = await exchange_rates_collection.find_one({
-        "from_currency": from_currency,
-        "to_currency": to_currency
-    })
-    if rate:
-        return ExchangeRate(**rate)
-    return None
-
-async def update_exchange_rate(from_currency: str, to_currency: str, new_rate: float):
-    await exchange_rates_collection.update_one(
-        {"from_currency": from_currency, "to_currency": to_currency},
-        {"$set": {"rate": new_rate, "last_updated": "2025-07-10"}},
-        upsert=True
-    )
+        db.add_all(default_exchange_rates)
+        db.commit()

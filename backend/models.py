@@ -3,19 +3,18 @@ from typing import List, Optional
 from datetime import datetime
 import uuid
 
+# =============================================================================
+# PYDANTIC MODELS FOR API
+# =============================================================================
+
 # Packing List Models
-class PackingItem(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+class PackingItemBase(BaseModel):
     name: str
     category: str
     packed: bool = False
 
-class TripType(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    icon: str
-    color: str
-    items: List[PackingItem] = []
+class PackingItem(PackingItemBase):
+    id: str
 
 class PackingItemCreate(BaseModel):
     name: str
@@ -24,25 +23,31 @@ class PackingItemCreate(BaseModel):
 class PackingItemUpdate(BaseModel):
     packed: bool
 
-# Itinerary Models
-class ItineraryEvent(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    title: str
-    date: str
-    time: str
-    location: str
-    description: str
-    type: str = "activity"  # flight, accommodation, dining, activity
-    icon: str = "📅"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+class TripTypeBase(BaseModel):
+    name: str
+    icon: str
+    color: str
 
-class ItineraryEventCreate(BaseModel):
+class TripType(TripTypeBase):
+    id: str
+    items: List[PackingItem] = []
+
+# Itinerary Models
+class ItineraryEventBase(BaseModel):
     title: str
     date: str
     time: str
     location: str
     description: str
     type: str = "activity"
+
+class ItineraryEvent(ItineraryEventBase):
+    id: str
+    icon: str = "📅"
+    created_at: datetime
+
+class ItineraryEventCreate(ItineraryEventBase):
+    pass
 
 class ItineraryEventUpdate(BaseModel):
     title: Optional[str] = None
@@ -53,17 +58,17 @@ class ItineraryEventUpdate(BaseModel):
     type: Optional[str] = None
 
 # Currency Converter Models
-class ExchangeRate(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+class ExchangeRateBase(BaseModel):
     from_currency: str
     to_currency: str
     rate: float
-    last_updated: str = Field(default_factory=lambda: datetime.utcnow().strftime('%Y-%m-%d'))
 
-class ExchangeRateCreate(BaseModel):
-    from_currency: str
-    to_currency: str
-    rate: float
+class ExchangeRate(ExchangeRateBase):
+    id: str
+    last_updated: str
+
+class ExchangeRateCreate(ExchangeRateBase):
+    pass
 
 class ExchangeRateUpdate(BaseModel):
     rate: float
@@ -77,3 +82,10 @@ class ConversionRequest(BaseModel):
     amount: float
     from_currency: str
     to_currency: str
+
+class ConversionResponse(BaseModel):
+    amount: float
+    from_currency: str
+    to_currency: str
+    converted_amount: float
+    exchange_rate: float
