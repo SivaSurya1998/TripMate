@@ -1,43 +1,139 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Checkbox } from './ui/checkbox';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
-import { Plus, Package, CheckCircle2 } from 'lucide-react';
-import { tripTypes } from '../data/mockData';
+import { Plus, Package, CheckCircle2, Loader2 } from 'lucide-react';
+import { packingListAPI } from '../services/api';
+import { useToast } from '../hooks/use-toast';
 
 const PackingList = () => {
-  const [selectedTrip, setSelectedTrip] = useState(tripTypes[0]);
-  const [items, setItems] = useState(selectedTrip.items);
+  const [tripTypes, setTripTypes] = useState([]);
+  const [selectedTrip, setSelectedTrip] = useState(null);
   const [newItem, setNewItem] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const { toast } = useToast();
 
-  const handleTripChange = (trip) => {
-    setSelectedTrip(trip);
-    setItems(trip.items);
-  };
+  // Load trip types on component mount
+  useEffect(() => {
+    loadTripTypes();
+  }, []);
 
-  const toggleItem = (itemId) => {
-    setItems(prev => prev.map(item => 
-      item.id === itemId ? { ...item, packed: !item.packed } : item
-    ));
-  };
-
-  const addItem = () => {
-    if (newItem.trim()) {
-      const item = {
-        id: Date.now(),
-        name: newItem.trim(),
-        category: 'custom',
-        packed: false
-      };
-      setItems(prev => [...prev, item]);
-      setNewItem('');
+  const loadTripTypes = async () => {
+    try {
+      setLoading(true);
+      const types = await packingListAPI.getTripTypes();
+      setTripTypes(types);
+      if (types.length > 0) {
+        setSelectedTrip(types[0]);
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to load trip types. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const packedCount = items.filter(item => item.packed).length;
-  const totalCount = items.length;
+  const handleTripChange = async (trip) => {
+    try {
+      const fullTrip = await packingListAPI.getTripType(trip.id);
+      setSelectedTrip(fullTrip);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to load trip details.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const toggleItem = async (itemId) => {
+    if (!selectedTrip) return;
+
+    const item = selectedTrip.items.find(item => item.id === itemId);
+    if (!item) return;
+
+    try {
+      await packingListAPI.updateItem(selectedTrip.id, itemId, !item.packed);
+      
+      // Update local state
+      setSelectedTrip(prev => ({
+        ...prev,
+        items: prev.items.map(item =>
+          item.id === itemId ? { ...item, packed: !item.packed } : item
+        )
+      }));
+
+      toast({
+        title: "Updated",
+        description: `${item.name} ${!item.packed ? 'packed' : 'unpacked'}`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to update item. Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const addItem = async () => {
+    if (!newItem.trim() || !selectedTrip) return;
+
+    try {
+      setAdding(true);
+      const newItemData = await packingListAPI.addItem(selectedTrip.id, {
+        name: newItem.trim(),
+        category: 'custom'
+      });
+
+      // Update local state
+      setSelectedTrip(prev => ({
+        ...prev,
+        items: [...prev.items, newItemData]
+      }));
+
+      setNewItem('');
+      toast({
+        title: "Item Added",
+        description: `${newItemData.name} added to your packing list`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to add item. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <Loader2 className="h-8 w-8 animate-spin" />
+        <span className="ml-2">Loading trip types...</span>
+      </div>
+    );
+  }
+
+  if (!selectedTrip) {
+    return (
+      <div className="text-center py-8">
+        <p>No trip types available. Please try refreshing the page.</p>
+      </div>
+    );
+  }
+
+  const packedCount = selectedTrip.items.filter(item => item.packed).length;
+  const totalCount = selectedTrip.items.length;
   const progress = totalCount > 0 ? (packedCount / totalCount) * 100 : 0;
 
   return (
@@ -56,7 +152,7 @@ const PackingList = () => {
               <div className="text-center">
                 <div className="text-4xl mb-2">{trip.icon}</div>
                 <h3 className="font-bold text-lg">{trip.name}</h3>
-                <p className="text-sm opacity-90">{trip.items.length} essential items</p>
+                <p className="text-sm opacity-90">{trip.items.length} items</p>
               </div>
             </CardContent>
           </Card>
@@ -104,9 +200,10 @@ const PackingList = () => {
               onChange={(e) => setNewItem(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && addItem()}
               className="flex-1"
+              disabled={adding}
             />
-            <Button onClick={addItem} disabled={!newItem.trim()}>
-              Add Item
+            <Button onClick={addItem} disabled={!newItem.trim() || adding}>
+              {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add Item'}
             </Button>
           </div>
         </CardContent>
@@ -120,7 +217,7 @@ const PackingList = () => {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {items.map((item) => (
+            {selectedTrip.items.map((item) => (
               <div 
                 key={item.id}
                 className={`flex items-center justify-between p-3 rounded-lg transition-all duration-200 hover:bg-muted/50 ${
