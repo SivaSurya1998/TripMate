@@ -85,7 +85,7 @@ const Home = () => {
           <div className="text-center text-sm text-muted-foreground">
             <p>Built with ❤️ for travelers worldwide</p>
             <p className="mt-1 text-xs">
-              ✨ Powered by React + FastAPI + PostgreSQL
+              ✨ Powered by React + FastAPI + MongoDB - Ready for Deployment!
             </p>
           </div>
         </div>
